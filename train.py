@@ -27,36 +27,38 @@ random.shuffle(annotation_train)
 annotation_2007_test = get_path_and_annotation(test_2007_dir)
 annotation_test = annotation_2007_test
 print('The number of training samples are:'+str(len(annotation_train)))
-train_iter = read_data(annotation_train,batch_size,input_shape=(800,1024),is_random=True,is_crop=True)
-test_iter = read_data(annotation_test,1,input_shape=(800,1024),is_random=False,is_crop=False)
-tsw = SummaryWriter(log_dir='./log')
+train_iter = read_data(annotation_train, BATCH_SIZE, input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH), is_random=True, is_crop=True)
+test_iter = read_data(annotation_test, 1, input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH), is_random=False, is_crop=False)
+tsw = SummaryWriter(log_dir=LOG_DIR)
 
 #####network
-fcos = FCOS(FPN_Output,Head,'resnet18',is_training=True,num_classes=20).to(device)
+fcos = FCOS(FPN_Output, Head, backbone, num_classes=NUM_CLASSES).to(device)
 ###losses
-fcos_loss = FCOSLoss(FocalLoss,IOULoss).to(device)
-adam_optimizer = opt.Adam(fcos.parameters(),lr=1e-4,weight_decay=1e-5)
+fcos_loss = FCOSLoss(FocalLoss, IOULoss).to(device)
+adam_optimizer = opt.Adam(fcos.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+# sgd_optimizer = opt.SGD(fcos.parameters(), lr=learning_rate, weight_decay=WEIGHT_DECAY, momentum=MOMENTUM)
 
 
+if(USE_CHECKPOINT):
+    checkpoint = torch.load(CHECKPOINT_DIR+'resnet_18_iter_' + str(START_ITER) + '.pth.tar')
+    print('Restore from the checkpoint!')
+    fcos.load_state_dict(checkpoint['state_dict'])
+else:
+    START_ITER = 0
 
-start_iter =26800
-checkpoint = torch.load('/media/xinje/New Volume/fcos/pytorch/resnet_18/resnet_18_iter_' + str(start_iter) + '.pth.tar')
-print('Restore from the checkpoint!')
-fcos.load_state_dict(checkpoint['state_dict'])
-
-for iteration in range(start_iter + 1, 1000000):
-    if (((iteration - start_iter) // batch_size) % 16651 == 0):
+for iteration in range(START_ITER + 1, 1000000):
+    if (((iteration - START_ITER) // BATCH_SIZE) % 16651 == 0):
         random.shuffle(annotation_train)
-        train_iter = read_data(annotation_train, batch_size, input_shape=(800, 1024), is_random=True, is_crop=False)
+        train_iter = read_data(annotation_train, BATCH_SIZE, input_shape=(IMAGE_HEIGHT, IMAGE_WIDTH), is_random=True, is_crop=False)
 
     image_batch, annotation_batch, cls_batch = next(train_iter)
     #     image_batch = (image_batch-mean)/std
     # one hot for cls_batch(change class from[1,20] to [0,21])
-    eye = np.eye(num_classes)
+    eye = np.eye(NUM_CLASSES)
     eye = np.concatenate([eye, np.expand_dims(np.zeros_like(eye[0]), axis=0)])
     cls_batch = eye[(cls_batch - 1).astype(np.int32)].astype(np.float32)
     matched_true_boxes, matched_true_classes, matched_true_centerness = encode_boxes(annotation_batch, cls_batch,
-                                                                                     feature_size, stride)
+                                                                                     FEATURE_SIZE, STRIDE)
     feature_state = np.squeeze(matched_true_centerness != 0, axis=-1)
 
     # copy numpy ground truth data to GPU
@@ -67,7 +69,7 @@ for iteration in range(start_iter + 1, 1000000):
     matched_true_centerness = torch.from_numpy(matched_true_centerness.astype(np.float32)).to(device)
     feature_state = torch.from_numpy(feature_state).to(device)
     # get network output for calculating losses
-    centerness_output, classes_output, boxes_output = fcos.train()(image_batch, feature_size)
+    centerness_output, classes_output, boxes_output = fcos.train()(image_batch, FEATURE_SIZE)
     # calculate loss
     total_losses, focal_losses, iou_losses, centerness_losses = fcos_loss(feature_state, matched_true_classes,
                                                                           matched_true_boxes, matched_true_centerness,
@@ -89,17 +91,17 @@ for iteration in range(start_iter + 1, 1000000):
             iou_losses.cpu().data.numpy()) + ' centerness loss: ' + str(centerness_losses.cpu().data.numpy()))
     if (iteration % 200 == 0 and iteration != 0):
         torch.save({'state_dict': fcos.state_dict()},
-                   '/media/xinje/New Volume/fcos/pytorch/resnet_18/resnet_18_iter_' + str(iteration) + '.pth.tar')
+                   CHECKPOINT_DIR+'resnet_18_iter_' + str(iteration) + '.pth.tar')
         print('Model saved!')
 
         #image_batch_test, annotation_batch_test, cls_batch_test = next(test_iter)
         #         image_batch_processed = (image_batch-mean)/std
         #image_batch_processed = torch.from_numpy(image_batch_test.astype(np.float32)).permute(0, 3, 1, 2).to(device)
-        # centerness_output, classes_output, boxes_output = fcos.eval()(image_batch_processed, feature_size)
+        # centerness_output, classes_output, boxes_output = fcos.eval()(image_batch_processed, FEATURE_SIZE)
         #
         # temp_centerness_pred, temp_classes_pred, temp_localization_pred = predict_outputs(centerness_output,
         #                                                                                   classes_output, boxes_output,
-        #                                                                                   feature_size, stride,
+        #                                                                                   FEATURE_SIZE, STRIDE,
         #                                                                                   inference_threshold=0.2)
         # xmin, ymin, xmax, ymax = np.split(temp_localization_pred.cpu().data.numpy(), axis=1, indices_or_sections=4)
         # plt.hlines(ymin, xmin, xmax, 'r')
